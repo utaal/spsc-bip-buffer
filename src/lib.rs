@@ -145,10 +145,9 @@ impl<'a> core::ops::DerefMut for BipBufferWriterReservation<'a> {
 
 impl<'a> core::ops::Drop for BipBufferWriterReservation<'a> {
     fn drop(&mut self) {
-        core::sync::atomic::fence(Ordering::Release);
         if self.wraparound {
             // eprintln!("writing last {}", self.writer.write);
-            self.writer.buffer.last.store(self.writer.write, Ordering::Release);
+            self.writer.buffer.last.store(self.writer.write, Ordering::Relaxed);
             self.writer.write = 0;
         }
         self.writer.write += self.len;
@@ -169,13 +168,12 @@ impl BipBufferReader {
         self.priv_write = self.buffer.write.load(Ordering::Acquire);
         // eprintln!("valid (write):{:?} read:{:?} last:{:?}", self.priv_write, self.read, self.last);
         if self.priv_write >= self.read {
-            core::sync::atomic::fence(Ordering::Acquire);
             unsafe {
                 // eprintln!("slice (1) {} {}", self.read, self.priv_write);
                 core::slice::from_raw_parts_mut(self.buffer.buf.add(self.read), self.priv_write - self.read)
             }
         } else {
-            self.last = self.buffer.last.load(Ordering::Acquire);
+            self.last = self.buffer.last.load(Ordering::Relaxed);
             if self.read == self.last {
                 // eprintln!("moving last (v)");
                 self.read = 0;
@@ -183,7 +181,6 @@ impl BipBufferReader {
                 self.buffer.last.store(self.last, Ordering::Release);
                 return self.valid();
             }
-            core::sync::atomic::fence(Ordering::Acquire);
             unsafe {
                 // eprintln!("slice (2) {} {}", self.last, self.read);
                 core::slice::from_raw_parts_mut(self.buffer.buf.add(self.read), self.last - self.read)
@@ -205,7 +202,7 @@ impl BipBufferReader {
                 // eprintln!("moving last (c)");
                 self.read = 0;
                 self.last = self.buffer.len;
-                self.buffer.last.store(self.last, Ordering::Release);
+                self.buffer.last.store(self.last, Ordering::Relaxed);
             } else if len <= remaining {
                 self.read += len;
             } else {
