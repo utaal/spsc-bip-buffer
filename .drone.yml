@@ -1,0 +1,12 @@
+kind: pipeline
+name: test-arm
+
+platform:
+  os: linux
+  arch: arm64
+
+steps:
+- name: test
+  image: rust
+  commands:
+  - cargo test --release --features test_nosched -- --test-threads=1
