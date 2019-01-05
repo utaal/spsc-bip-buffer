@@ -5,6 +5,10 @@ authors = ["Andrea Lattuada <andrea@lattuada.me>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
 
+[features]
+default = []
+test_nosched = []
+
 [dependencies]
 
 [dev-dependencies]

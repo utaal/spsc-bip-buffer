@@ -240,30 +240,30 @@ mod tests {
 
     #[test]
     fn static_prime_length() {
-        const msg_length: u8 = 17; // intentionally prime
+        const MSG_LENGTH: u8 = 17; // intentionally prime
         let (mut writer, mut reader) = bip_buffer(vec![128u8; 64].into_boxed_slice());
         let sender = ::std::thread::spawn(move || {
-            let mut msg = [0u8; msg_length as usize];
+            let mut msg = [0u8; MSG_LENGTH as usize];
             for _ in 0..1024 {
                 for i in 0..128u8 {
-                    &mut msg[..].copy_from_slice(&[i; msg_length as usize][..]);
-                    msg[i as usize % (msg_length as usize)] = 0;
+                    &mut msg[..].copy_from_slice(&[i; MSG_LENGTH as usize][..]);
+                    msg[i as usize % (MSG_LENGTH as usize)] = 0;
                     // eprintln!(">>>>>>> {} {:?}", i, msg);
-                    writer.spin_reserve(msg_length as usize).copy_from_slice(&msg[..]);
+                    writer.spin_reserve(MSG_LENGTH as usize).copy_from_slice(&msg[..]);
                 }
             }
         });
         let receiver = ::std::thread::spawn(move || {
-            let mut msg = [0u8; msg_length as usize];
+            let mut msg = [0u8; MSG_LENGTH as usize];
             for _ in 0..1024 {
                 for i in 0..128u8 {
                     // eprintln!("<<<<<<< {}", i);
-                    &mut msg[..].copy_from_slice(&[i; msg_length as usize][..]);
-                    msg[i as usize % (msg_length as usize)] = 0;
-                    while reader.valid().len() < (msg_length as usize) {}
+                    &mut msg[..].copy_from_slice(&[i; MSG_LENGTH as usize][..]);
+                    msg[i as usize % (MSG_LENGTH as usize)] = 0;
+                    while reader.valid().len() < (MSG_LENGTH as usize) {}
                     // eprintln!("<<<<<<< checking {} {:?}", i, msg);
-                    assert_eq!(&reader.valid()[..msg_length as usize], &msg[..]);
-                    assert!(reader.consume(msg_length as usize));
+                    assert_eq!(&reader.valid()[..MSG_LENGTH as usize], &msg[..]);
+                    assert!(reader.consume(MSG_LENGTH as usize));
                     // eprintln!("<<<<<<< ok {}", i);
                 }
             }
@@ -276,20 +276,20 @@ mod tests {
     fn random_length() {
         use rand::Rng;
 
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", not(feature = "test_nosched")))]
         use deterministic::spawn::spawn_with_random_prio as test_spawn;
 
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(any(not(target_os = "linux"), feature = "test_nosched"))]
         use ::std::thread::spawn as test_spawn;
 
-        const max_length: usize = 127;
+        const MAX_LENGTH: usize = 127;
         let (mut writer, mut reader) = bip_buffer(vec![0u8; 1024].into_boxed_slice());
         let sender = test_spawn(move || {
             let mut rng = rand::thread_rng();
-            let mut msg = [0u8; max_length];
+            let mut msg = [0u8; MAX_LENGTH];
             for _ in 0..1024 {
                 for round in 0..128u8 {
-                    let length: u8 = rng.gen_range(1, max_length as u8);
+                    let length: u8 = rng.gen_range(1, MAX_LENGTH as u8);
                     msg[0] = length;
                     for i in 1..length {
                         msg[i as usize] = round;
@@ -299,7 +299,7 @@ mod tests {
             }
         });
         let receiver = test_spawn(move || {
-            let mut msg = [0u8; max_length];
+            let mut msg = [0u8; MAX_LENGTH];
             for _ in 0..1024 {
                 for round in 0..128u8 {
                     let msg_len = loop {
