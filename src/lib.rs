@@ -233,8 +233,8 @@ mod tests {
                 while reader.valid().len() < 8 {}
                 assert_eq!(reader.valid(), &[10, 11, 12, 13, 14, 15, 16, i]);
             });
-            sender.join();
-            receiver.join();
+            sender.join().unwrap();
+            receiver.join().unwrap();
         }
     }
 
@@ -268,8 +268,61 @@ mod tests {
                 }
             }
         });
-        sender.join();
-        receiver.join();
+        sender.join().unwrap();
+        receiver.join().unwrap();
+    }
+
+    #[test]
+    fn random_length() {
+        use rand::Rng;
+
+        #[cfg(target_os = "linux")]
+        use deterministic::spawn::spawn_with_random_prio as test_spawn;
+
+        #[cfg(not(target_os = "linux"))]
+        use ::std::thread::spawn as test_spawn;
+
+        const max_length: usize = 127;
+        let (mut writer, mut reader) = bip_buffer(vec![0u8; 1024].into_boxed_slice());
+        let sender = test_spawn(move || {
+            let mut rng = rand::thread_rng();
+            let mut msg = [0u8; max_length];
+            for _ in 0..1024 {
+                for round in 0..128u8 {
+                    let length: u8 = rng.gen_range(1, max_length as u8);
+                    msg[0] = length;
+                    for i in 1..length {
+                        msg[i as usize] = round;
+                    }
+                    writer.spin_reserve(length as usize).copy_from_slice(&msg[..length as usize]);
+                }
+            }
+        });
+        let receiver = test_spawn(move || {
+            let mut msg = [0u8; max_length];
+            for _ in 0..1024 {
+                for round in 0..128u8 {
+                    let msg_len = loop {
+                        let valid = reader.valid();
+                        if valid.len() < 1 { continue; }
+                        break valid[0] as usize;
+                    };
+                    let recv_msg = loop {
+                        let valid = reader.valid();
+                        if valid.len() < msg_len { continue; }
+                        break valid;
+                    };
+                    msg[0] = msg_len as u8;
+                    for i in 1..msg_len {
+                        msg[i as usize] = round;
+                    }
+                    assert_eq!(&recv_msg[..msg_len], &msg[..msg_len]);
+                    assert!(reader.consume(msg_len as usize));
+                }
+            }
+        });
+        sender.join().unwrap();
+        receiver.join().unwrap();
     }
 
 }
