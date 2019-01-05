@@ -1,7 +1,7 @@
 [package]
 name = "spsc-bip-buffer"
 description = "A concurrent, spsc ring-buffer with sized reservations"
-version = "0.1.0"
+version = "0.2.0-alpha"
 authors = ["Andrea Lattuada <andrea@lattuada.me>"]
 edition = "2018"
 license = "MIT OR Apache-2.0"
