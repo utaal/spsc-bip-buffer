@@ -1,5 +1,6 @@
 [package]
 name = "spsc-bip-buffer"
+description = "A concurrent, spsc ring-buffer with sized reservations"
 version = "0.1.0"
 authors = ["Andrea Lattuada <andrea@lattuada.me>"]
 edition = "2018"
@@ -12,5 +13,5 @@ test_nosched = []
 [dependencies]
 
 [dev-dependencies]
-deterministic = "*"
-rand = "0.6"
+deterministic = "^0.1"
+rand = "^0.6"
