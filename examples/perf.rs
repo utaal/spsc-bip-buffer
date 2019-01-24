@@ -10,12 +10,6 @@ fn main() {
     let sender_core_id: usize = args.next().unwrap().parse().unwrap();
     let receiver_core_id: usize = args.next().unwrap().parse().unwrap();
 
-    #[cfg(all(target_os = "linux", not(feature = "test_nosched")))]
-    use deterministic::spawn::spawn_with_random_prio as test_spawn;
-
-    #[cfg(any(not(target_os = "linux"), feature = "test_nosched"))]
-    use ::std::thread::spawn as test_spawn;
-
     let mut core_ids: Vec<_> = core_affinity::get_core_ids().unwrap().into_iter().map(Some).collect();
     let sender_core_id = core_ids[sender_core_id].take().unwrap();
     let receiver_core_id = core_ids[receiver_core_id].take().unwrap();
@@ -24,7 +18,7 @@ fn main() {
 
     const MAX_LENGTH: usize = 255;
     let (mut writer, mut reader) = bip_buffer(vec![0u8; 16<<10].into_boxed_slice());
-    let sender = test_spawn(move || {
+    let sender = ::std::thread::spawn(move || {
         core_affinity::set_for_current(sender_core_id);
 
         let mut rng = rand::thread_rng();
@@ -42,9 +36,10 @@ fn main() {
 
         eprintln!("sender done");
     });
-    let receiver = test_spawn(move || {
+    let receiver = ::std::thread::spawn(move || {
         core_affinity::set_for_current(receiver_core_id);
         let mut bytes_received = 0;
+        let mut msgs_received: usize = 0;
 
         let mut msg = [0u8; MAX_LENGTH];
         for _ in 0..REPETITIONS {
@@ -66,6 +61,7 @@ fn main() {
                 assert_eq!(&recv_msg[..msg_len], &msg[..msg_len]);
                 assert!(reader.consume(msg_len as usize));
                 bytes_received += msg_len;
+                msgs_received += 1;
             }
         }
 
@@ -74,7 +70,8 @@ fn main() {
         eprintln!("receiver done");
         let nanos = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
         let bytes_per_sec = bytes_received as f64 / ((nanos as f64) / 1_000_000_000f64);
-        println!("{}\t{}\t{}", nanos, bytes_received, bytes_per_sec);
+        let msgs_per_sec = msgs_received as f64 / ((nanos as f64) / 1_000_000_000f64);
+        println!("{}\t{}\t{}\t{}\t{}", nanos, bytes_received, msgs_received, bytes_per_sec, msgs_per_sec);
     });
     sender.join().unwrap();
     receiver.join().unwrap();
