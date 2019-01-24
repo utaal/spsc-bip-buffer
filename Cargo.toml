@@ -15,3 +15,4 @@ test_nosched = []
 [dev-dependencies]
 deterministic = "^0.1"
 rand = "^0.6"
+core_affinity = "0.5.9"
