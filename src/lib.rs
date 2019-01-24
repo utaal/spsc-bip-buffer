@@ -178,7 +178,7 @@ impl BipBufferReader {
                 // eprintln!("moving last (v)");
                 self.read = 0;
                 self.last = self.buffer.len;
-                self.buffer.last.store(self.last, Ordering::Release);
+                self.buffer.last.store(self.last, Ordering::Relaxed);
                 return self.valid();
             }
             unsafe {
