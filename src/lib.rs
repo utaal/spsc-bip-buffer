@@ -12,6 +12,7 @@ struct BipBuffer {
 pub struct BipBufferWriter {
     buffer: Arc<BipBuffer>,
     write: usize,
+    last: usize,
 }
 
 unsafe impl Send for BipBufferWriter {}
@@ -20,7 +21,7 @@ pub struct BipBufferReader {
     buffer: Arc<BipBuffer>,
     read: usize,
     priv_write: usize,
-    last: usize,
+    priv_last: usize,
 }
 
 unsafe impl Send for BipBufferReader {}
@@ -41,12 +42,13 @@ pub fn bip_buffer(mut buf_box: Box<[u8]>) -> (BipBufferWriter, BipBufferReader) 
         BipBufferWriter {
             buffer: buffer.clone(),
             write: 0,
+            last: len,
         },
         BipBufferReader {
             buffer,
             read: 0,
             priv_write: 0,
-            last: len,
+            priv_last: len,
         },
     )
 }
@@ -151,6 +153,10 @@ impl<'a> core::ops::Drop for BipBufferWriterReservation<'a> {
             self.writer.write = 0;
         }
         self.writer.write += self.len;
+        if self.writer.write > self.writer.last {
+            self.writer.last = self.writer.write;
+            self.writer.buffer.last.store(self.writer.last, Ordering::Relaxed);
+        }
         self.writer.buffer.write.store(self.writer.write, Ordering::Release);
         // eprintln!("drop write:{} {:?}", self.writer.write, unsafe {
         // core::slice::from_raw_parts(self.writer.buffer.buf, self.writer.buffer.len) });
@@ -173,17 +179,15 @@ impl BipBufferReader {
                 core::slice::from_raw_parts_mut(self.buffer.buf.add(self.read), self.priv_write - self.read)
             }
         } else {
-            self.last = self.buffer.last.load(Ordering::Relaxed);
-            if self.read == self.last {
+            self.priv_last = self.buffer.last.load(Ordering::Relaxed);
+            if self.read == self.priv_last {
                 // eprintln!("moving last (v)");
                 self.read = 0;
-                self.last = self.buffer.len;
-                self.buffer.last.store(self.last, Ordering::Relaxed);
                 return self.valid();
             }
             unsafe {
                 // eprintln!("slice (2) {} {}", self.last, self.read);
-                core::slice::from_raw_parts_mut(self.buffer.buf.add(self.read), self.last - self.read)
+                core::slice::from_raw_parts_mut(self.buffer.buf.add(self.read), self.priv_last - self.read)
             }
         }
     }
@@ -197,12 +201,10 @@ impl BipBufferReader {
                 return false;
             }
         } else {
-            let remaining = self.last - self.read;
+            let remaining = self.priv_last - self.read;
             if len == remaining {
                 // eprintln!("moving last (c)");
                 self.read = 0;
-                self.last = self.buffer.len;
-                self.buffer.last.store(self.last, Ordering::Relaxed);
             } else if len <= remaining {
                 self.read += len;
             } else {
