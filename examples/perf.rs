@@ -9,6 +9,7 @@ fn main() {
     let _ = args.next();
     let sender_core_id: usize = args.next().unwrap().parse().unwrap();
     let receiver_core_id: usize = args.next().unwrap().parse().unwrap();
+    let test_correctness: bool = args.next().unwrap().parse().unwrap();
 
     let mut core_ids: Vec<_> = core_affinity::get_core_ids().unwrap().into_iter().map(Some).collect();
     let sender_core_id = core_ids[sender_core_id].take().unwrap();
@@ -21,11 +22,11 @@ fn main() {
     let sender = ::std::thread::spawn(move || {
         core_affinity::set_for_current(sender_core_id);
 
-        let mut rng = rand::thread_rng();
+        // let mut rng = rand::thread_rng();
         let mut msg = [0u8; MAX_LENGTH];
         for _ in 0..REPETITIONS {
             for round in 0..128u8 {
-                let length: u8 = rng.gen_range(1, MAX_LENGTH as u8);
+                let length: u8 = MAX_LENGTH as u8; // rng.gen_range(1, MAX_LENGTH as u8);
                 msg[0] = length;
                 for i in 1..length {
                     msg[i as usize] = round;
@@ -54,11 +55,13 @@ fn main() {
                     if valid.len() < msg_len { continue; }
                     break valid;
                 };
-                msg[0] = msg_len as u8;
-                for i in 1..msg_len {
-                    msg[i as usize] = round;
+                if test_correctness {
+                    msg[0] = msg_len as u8;
+                    for i in 1..msg_len {
+                        msg[i as usize] = round;
+                    }
+                    assert_eq!(&recv_msg[..msg_len], &msg[..msg_len]);
                 }
-                assert_eq!(&recv_msg[..msg_len], &msg[..msg_len]);
                 assert!(reader.consume(msg_len as usize));
                 bytes_received += msg_len;
                 msgs_received += 1;
