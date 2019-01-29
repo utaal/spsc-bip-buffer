@@ -223,10 +223,10 @@ mod tests {
     fn basic() {
         for i in 0..128 {
             let (mut writer, mut reader) = bip_buffer(vec![0u8; 16].into_boxed_slice());
-            let sender = ::std::thread::spawn(move || {
+            let sender = std::thread::spawn(move || {
                 writer.reserve(8).as_mut().expect("reserve").copy_from_slice(&[10, 11, 12, 13, 14, 15, 16, i]);
             });
-            let receiver = ::std::thread::spawn(move || {
+            let receiver = std::thread::spawn(move || {
                 while reader.valid().len() < 8 {}
                 assert_eq!(reader.valid(), &[10, 11, 12, 13, 14, 15, 16, i]);
             });
@@ -239,7 +239,7 @@ mod tests {
     fn static_prime_length() {
         const MSG_LENGTH: u8 = 17; // intentionally prime
         let (mut writer, mut reader) = bip_buffer(vec![128u8; 64].into_boxed_slice());
-        let sender = ::std::thread::spawn(move || {
+        let sender = std::thread::spawn(move || {
             let mut msg = [0u8; MSG_LENGTH as usize];
             for _ in 0..1024 {
                 for i in 0..128u8 {
@@ -250,7 +250,7 @@ mod tests {
                 }
             }
         });
-        let receiver = ::std::thread::spawn(move || {
+        let receiver = std::thread::spawn(move || {
             let mut msg = [0u8; MSG_LENGTH as usize];
             for _ in 0..1024 {
                 for i in 0..128u8 {
@@ -273,15 +273,9 @@ mod tests {
     fn random_length() {
         use rand::Rng;
 
-        #[cfg(all(target_os = "linux", not(feature = "test_nosched")))]
-        use deterministic::spawn::spawn_with_random_prio as test_spawn;
-
-        #[cfg(any(not(target_os = "linux"), feature = "test_nosched"))]
-        use ::std::thread::spawn as test_spawn;
-
         const MAX_LENGTH: usize = 127;
         let (mut writer, mut reader) = bip_buffer(vec![0u8; 1024].into_boxed_slice());
-        let sender = test_spawn(move || {
+        let sender = std::thread::spawn(move || {
             let mut rng = rand::thread_rng();
             let mut msg = [0u8; MAX_LENGTH];
             for _ in 0..1024 {
@@ -295,7 +289,7 @@ mod tests {
                 }
             }
         });
-        let receiver = test_spawn(move || {
+        let receiver = std::thread::spawn(move || {
             let mut msg = [0u8; MAX_LENGTH];
             for _ in 0..1024 {
                 for round in 0..128u8 {

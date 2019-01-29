@@ -8,11 +8,9 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
-test_nosched = []
 
 [dependencies]
 
 [dev-dependencies]
-deterministic = "^0.1"
 rand = "^0.6"
 core_affinity = "0.5.9"
