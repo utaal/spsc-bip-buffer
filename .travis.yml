@@ -4,4 +4,4 @@ rust:
   - beta
 cache: cargo
 script:
-  - cargo test --release --features test_nosched -- --test-threads=1
+  - cargo test --release -- --test-threads=1
