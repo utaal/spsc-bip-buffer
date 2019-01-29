@@ -1,12 +1,13 @@
 use std::sync::Arc;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use cache_line_size::CacheAligned;
 
 struct BipBuffer {
     buf: *mut u8,
     len: usize,
-    read: AtomicUsize,
-    write: AtomicUsize,
-    last: AtomicUsize,
+    read: CacheAligned<AtomicUsize>,
+    write: CacheAligned<AtomicUsize>,
+    last: CacheAligned<AtomicUsize>,
 }
 
 pub struct BipBufferWriter {
@@ -33,9 +34,9 @@ pub fn bip_buffer(mut buf_box: Box<[u8]>) -> (BipBufferWriter, BipBufferReader) 
     let buffer = Arc::new(BipBuffer {
         buf,
         len,
-        read: AtomicUsize::new(0),
-        write: AtomicUsize::new(0),
-        last: AtomicUsize::new(0),
+        read: CacheAligned(AtomicUsize::new(0)),
+        write: CacheAligned(AtomicUsize::new(0)),
+        last: CacheAligned(AtomicUsize::new(0)),
     });
 
     (
@@ -63,7 +64,7 @@ struct PendingReservation {
 impl BipBufferWriter {
     fn reserve_core(&mut self, len: usize) -> Option<PendingReservation> {
         assert!(len > 0);
-        let read = self.buffer.read.load(Ordering::Acquire);
+        let read = self.buffer.read.0.load(Ordering::Acquire);
         // eprintln!("try reserve: read:{:?} write:{:?}", read, self.write);
         if self.write >= read {
             if self.buffer.len.saturating_sub(self.write) >= len {
@@ -149,15 +150,15 @@ impl<'a> core::ops::Drop for BipBufferWriterReservation<'a> {
     fn drop(&mut self) {
         if self.wraparound {
             // eprintln!("writing last {}", self.writer.write);
-            self.writer.buffer.last.store(self.writer.write, Ordering::Relaxed);
+            self.writer.buffer.last.0.store(self.writer.write, Ordering::Relaxed);
             self.writer.write = 0;
         }
         self.writer.write += self.len;
         if self.writer.write > self.writer.last {
             self.writer.last = self.writer.write;
-            self.writer.buffer.last.store(self.writer.last, Ordering::Relaxed);
+            self.writer.buffer.last.0.store(self.writer.last, Ordering::Relaxed);
         }
-        self.writer.buffer.write.store(self.writer.write, Ordering::Release);
+        self.writer.buffer.write.0.store(self.writer.write, Ordering::Release);
         // eprintln!("drop write:{} {:?}", self.writer.write, unsafe {
         // core::slice::from_raw_parts(self.writer.buffer.buf, self.writer.buffer.len) });
     }
@@ -171,7 +172,7 @@ impl<'a> BipBufferWriterReservation<'a> {
 
 impl BipBufferReader {
     pub fn valid(&mut self) -> &mut [u8] {
-        self.priv_write = self.buffer.write.load(Ordering::Acquire);
+        self.priv_write = self.buffer.write.0.load(Ordering::Acquire);
         // eprintln!("valid (write):{:?} read:{:?} last:{:?}", self.priv_write, self.read, self.last);
         if self.priv_write >= self.read {
             unsafe {
@@ -179,7 +180,7 @@ impl BipBufferReader {
                 core::slice::from_raw_parts_mut(self.buffer.buf.add(self.read), self.priv_write - self.read)
             }
         } else {
-            self.priv_last = self.buffer.last.load(Ordering::Relaxed);
+            self.priv_last = self.buffer.last.0.load(Ordering::Relaxed);
             if self.read == self.priv_last {
                 // eprintln!("moving last (v)");
                 self.read = 0;
@@ -211,7 +212,7 @@ impl BipBufferReader {
                 return false;
             }
         }
-        self.buffer.read.store(self.read, Ordering::Release);
+        self.buffer.read.0.store(self.read, Ordering::Release);
         // eprintln!("consumed (write):{:?} read:{:?} last:{:?}", self.priv_write, self.read, self.last);
         true
     }
