@@ -1,0 +1,6 @@
+upload-doc = false
+tag-prefix = "v"
+pre-release-commit-message = "[cargo-release] Release version {{version}}"
+pro-release-commit-message = "[cargo-release] Development version {{next_version}}"
+tag-message = "version {{version}}"
+dev-version-ext = "pre"
