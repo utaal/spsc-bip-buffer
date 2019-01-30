@@ -14,6 +14,10 @@ Inspired by [this article on codeproject](https://www.codeproject.com/Articles/3
 spsc-bip-buffer = "..."
 ```
 
+## Performance
+
+As of `e2a9fa8`, on a Intel(R) Xeon(R) CPU E5-2630 v3 @ 2.40GHz, it achieves 12.5M sends/sec and 3.2 GB/s with 255-byte long messages sent between two separate physical cores (see the `examples/perf.rs` experiment).
+
 ## License
 
 Licensed under your choice of:
