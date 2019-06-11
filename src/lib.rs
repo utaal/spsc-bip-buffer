@@ -10,6 +10,17 @@ struct BipBuffer {
     last: CacheAligned<AtomicUsize>,
 }
 
+#[cfg(feature = "debug")]
+impl BipBuffer {
+    fn dbg_info(&self) -> String {
+        format!(" read: {:?} -- write: {:?} -- last: {:?}  [len: {:?}] ",
+                self.read,
+                self.write,
+                self.last,
+                self.len)
+    }
+}
+
 pub struct BipBufferWriter {
     buffer: Arc<BipBuffer>,
     write: usize,
@@ -65,10 +76,8 @@ impl BipBufferWriter {
     fn reserve_core(&mut self, len: usize) -> Option<PendingReservation> {
         assert!(len > 0);
         let read = self.buffer.read.0.load(Ordering::Acquire);
-        // eprintln!("try reserve: read:{:?} write:{:?}", read, self.write);
         if self.write >= read {
             if self.buffer.len.saturating_sub(self.write) >= len {
-                // eprintln!("reserved {} at end (from {})", len, self.write);
                 Some(PendingReservation {
                     start: self.write,
                     len,
@@ -76,7 +85,6 @@ impl BipBufferWriter {
                 })
             } else {
                 if read.saturating_sub(1) >= len {
-                    // eprintln!("reserved {} at beginning (from {})", len, self.write);
                     Some(PendingReservation {
                         start: 0,
                         len,
@@ -88,7 +96,6 @@ impl BipBufferWriter {
             }
         } else {
             if (read - self.write).saturating_sub(1) >= len {
-                // eprintln!("reserved {} at end (from {})", len, self.write);
                 Some(PendingReservation {
                     start: self.write,
                     len,
@@ -149,7 +156,6 @@ impl<'a> core::ops::DerefMut for BipBufferWriterReservation<'a> {
 impl<'a> core::ops::Drop for BipBufferWriterReservation<'a> {
     fn drop(&mut self) {
         if self.wraparound {
-            // eprintln!("writing last {}", self.writer.write);
             self.writer.buffer.last.0.store(self.writer.write, Ordering::Relaxed);
             self.writer.write = 0;
         }
@@ -159,8 +165,9 @@ impl<'a> core::ops::Drop for BipBufferWriterReservation<'a> {
             self.writer.buffer.last.0.store(self.writer.last, Ordering::Relaxed);
         }
         self.writer.buffer.write.0.store(self.writer.write, Ordering::Release);
-        // eprintln!("drop write:{} {:?}", self.writer.write, unsafe {
-        // core::slice::from_raw_parts(self.writer.buffer.buf, self.writer.buffer.len) });
+
+        #[cfg(feature = "debug")]
+        eprintln!("+++{}", self.writer.buffer.dbg_info());
     }
 }
 
@@ -172,29 +179,27 @@ impl<'a> BipBufferWriterReservation<'a> {
 
 impl BipBufferReader {
     pub fn valid(&mut self) -> &mut [u8] {
+        #[cfg(feature = "debug")]
+        eprintln!("???{}", self.buffer.dbg_info());
         self.priv_write = self.buffer.write.0.load(Ordering::Acquire);
-        // eprintln!("valid (write):{:?} read:{:?} last:{:?}", self.priv_write, self.read, self.last);
+
         if self.priv_write >= self.read {
             unsafe {
-                // eprintln!("slice (1) {} {}", self.read, self.priv_write);
                 core::slice::from_raw_parts_mut(self.buffer.buf.add(self.read), self.priv_write - self.read)
             }
         } else {
             self.priv_last = self.buffer.last.0.load(Ordering::Relaxed);
             if self.read == self.priv_last {
-                // eprintln!("moving last (v)");
                 self.read = 0;
                 return self.valid();
             }
             unsafe {
-                // eprintln!("slice (2) {} {}", self.last, self.read);
                 core::slice::from_raw_parts_mut(self.buffer.buf.add(self.read), self.priv_last - self.read)
             }
         }
     }
 
     pub fn consume(&mut self, len: usize) -> bool {
-        // eprintln!("consume (write):{:?} read:{:?}", self.priv_write, self.read);
         if self.priv_write >= self.read {
             if len <= self.priv_write - self.read {
                 self.read += len;
@@ -204,7 +209,6 @@ impl BipBufferReader {
         } else {
             let remaining = self.priv_last - self.read;
             if len == remaining {
-                // eprintln!("moving last (c)");
                 self.read = 0;
             } else if len <= remaining {
                 self.read += len;
@@ -213,7 +217,8 @@ impl BipBufferReader {
             }
         }
         self.buffer.read.0.store(self.read, Ordering::Release);
-        // eprintln!("consumed (write):{:?} read:{:?} last:{:?}", self.priv_write, self.read, self.last);
+        #[cfg(feature = "debug")]
+        eprintln!("---{}", self.buffer.dbg_info());
         true
     }
 }
@@ -248,7 +253,6 @@ mod tests {
                 for i in 0..128u8 {
                     &mut msg[..].copy_from_slice(&[i; MSG_LENGTH as usize][..]);
                     msg[i as usize % (MSG_LENGTH as usize)] = 0;
-                    // eprintln!(">>>>>>> {} {:?}", i, msg);
                     writer.spin_reserve(MSG_LENGTH as usize).copy_from_slice(&msg[..]);
                 }
             }
@@ -257,14 +261,11 @@ mod tests {
             let mut msg = [0u8; MSG_LENGTH as usize];
             for _ in 0..1024 {
                 for i in 0..128u8 {
-                    // eprintln!("<<<<<<< {}", i);
                     &mut msg[..].copy_from_slice(&[i; MSG_LENGTH as usize][..]);
                     msg[i as usize % (MSG_LENGTH as usize)] = 0;
                     while reader.valid().len() < (MSG_LENGTH as usize) {}
-                    // eprintln!("<<<<<<< checking {} {:?}", i, msg);
                     assert_eq!(&reader.valid()[..MSG_LENGTH as usize], &msg[..]);
                     assert!(reader.consume(MSG_LENGTH as usize));
-                    // eprintln!("<<<<<<< ok {}", i);
                 }
             }
         });

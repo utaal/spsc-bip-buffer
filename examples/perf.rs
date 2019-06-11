@@ -104,9 +104,10 @@ fn main() {
         let nanos = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
         let bytes_per_sec = bytes_received as f64 / ((nanos as f64) / 1_000_000_000f64);
         let msgs_per_sec = msgs_received as f64 / ((nanos as f64) / 1_000_000_000f64);
+        eprintln!("elapsed (nanos)\tbytes\tmsgs\tbytes/s\tmsgs/s");
         println!("{}\t{}\t{}\t{}\t{}", nanos, bytes_received, msgs_received, bytes_per_sec, msgs_per_sec);
     });
     let hist = sender.join().unwrap();
-    eprintln!("{}", hist.summary_string());
+    eprintln!("reserve and send:\n{}", hist.summary_string());
     receiver.join().unwrap();
 }
