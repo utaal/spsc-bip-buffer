@@ -1,8 +1,17 @@
+//! `spsc-bip-buffer` is a single-producer single-consumer circular buffer that always supports
+//! writing a contiguous chunk of data. Write requests that cannot fit in an available contiguous
+//! area will wait till space is newly available (after the consumer has read the data).
+//!
+//! `spsc-bip-buffer` is lock-free and uses atomics for coordination.
+
+#![deny(missing_docs)]
+
 use std::sync::Arc;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use cache_line_size::CacheAligned;
 
 struct BipBuffer {
+    sequestered: Box<std::any::Any>,
     buf: *mut u8,
     len: usize,
     read: CacheAligned<AtomicUsize>,
@@ -21,6 +30,9 @@ impl BipBuffer {
     }
 }
 
+/// Represents the send side of the single-producer single-consumer circular buffer.
+///
+/// `BipBufferWriter` is `Send` so you can move it to the sender thread.
 pub struct BipBufferWriter {
     buffer: Arc<BipBuffer>,
     write: usize,
@@ -29,6 +41,9 @@ pub struct BipBufferWriter {
 
 unsafe impl Send for BipBufferWriter {}
 
+/// Represents the receive side of the single-producer single-consumer circular buffer.
+///
+/// `BipBufferReader` is `Send` so you can move it to the receiver thread.
 pub struct BipBufferReader {
     buffer: Arc<BipBuffer>,
     read: usize,
@@ -38,11 +53,23 @@ pub struct BipBufferReader {
 
 unsafe impl Send for BipBufferReader {}
 
-pub fn bip_buffer(mut buf_box: Box<[u8]>) -> (BipBufferWriter, BipBufferReader) {
-    let len = buf_box.len();
-    let buf = buf_box.as_mut_ptr();
-    Box::into_raw(buf_box);
+/// Creates a new `BipBufferWriter`/`BipBufferReader` pair using the provided underlying storage.
+///
+/// `BipBufferWriter` and `BipBufferReader` represent the send and receive side of the
+/// single-producer single-consumer circular buffer respectively.
+///
+/// ### Storage
+///
+/// This method takes ownership of the storage which can be recovered with `try_unwrap` on
+/// `BipBufferWriter` or `BipBufferReader`. If both sides of the channel have been dropped
+/// (not using `try_unwrap`), the storage is dropped.
+pub fn bip_buffer_from<B: std::ops::DerefMut<Target=[u8]>+'static>(from: B) -> (BipBufferWriter, BipBufferReader) {
+    let mut sequestered = Box::new(from);
+    let len = sequestered.len();
+    let buf = sequestered.as_mut_ptr();
+
     let buffer = Arc::new(BipBuffer {
+        sequestered,
         buf,
         len,
         read: CacheAligned(AtomicUsize::new(0)),
@@ -63,6 +90,23 @@ pub fn bip_buffer(mut buf_box: Box<[u8]>) -> (BipBufferWriter, BipBufferReader) 
             priv_last: len,
         },
     )
+}
+
+/// Creates a new `BipBufferWriter`/`BipBufferReader` pair using a `Vec` of the specified length
+/// as underlying storage.
+///
+/// `BipBufferWriter` and `BipBufferReader` represent the send and receive side of the
+/// single-producer single-consumer queue respectively.
+pub fn bip_buffer_with_len(len: usize) -> (BipBufferWriter, BipBufferReader) {
+    bip_buffer_from(vec![0u8; len].into_boxed_slice())
+}
+
+impl BipBuffer {
+    // NOTE: Panics if B is not the type of the underlying storage.
+    fn into_inner<B: std::ops::DerefMut<Target=[u8]>+'static>(self) -> B {
+        let BipBuffer { sequestered, .. } = self;
+        *sequestered.downcast::<B>().expect("incorrect underlying type")
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -107,6 +151,13 @@ impl BipBufferWriter {
         }
     }
 
+    /// Attempt to reserve the requested number of bytes. If no contiguous `len` bytes are available
+    /// in the circular buffer, this method returns `None`: check `spin_reserve` for a method that
+    /// busy waits till space is available.
+    ///
+    /// If successful, it returns a reservation that the sender can use to write data to the buffer.
+    /// Dropping the reservation signals completion of the write and makes the data available to the
+    /// reader.
     pub fn reserve(&mut self, len: usize) -> Option<BipBufferWriterReservation<'_>> {
         let reserved = self.reserve_core(len);
         if let Some(PendingReservation { start, len, wraparound }) = reserved {
@@ -116,6 +167,17 @@ impl BipBufferWriter {
         }
     }
 
+    /// Reserve the requested number of bytes. This method busy-waits until `len` contiguous bytes
+    /// are available in the circular buffer.
+    ///
+    /// If successful, it returns a reservation that the sender can use to write data to the buffer.
+    /// Dropping the reservation signals completion of the write and makes the data available to the
+    /// reader.
+    ///
+    /// ### Busy-waiting
+    ///
+    /// If the current thread is scheduled on the same core as the receiver, busy-waiting may
+    /// compete with the receiver [...]
     pub fn spin_reserve(&mut self, len: usize) -> BipBufferWriterReservation<'_> {
         assert!(len <= self.buffer.len);
         let PendingReservation { start, len, wraparound } = loop {
@@ -126,8 +188,60 @@ impl BipBufferWriter {
         };
         BipBufferWriterReservation { writer: self, start, len, wraparound }
     }
+
+    /// Attempts to recover the underlying storage. B must be the type of the storage passed to
+    /// `bip_buffer_from`. If the `BipBufferReader` side still exists, this will fail and return
+    /// `Err(self)`. If the `BipBufferReader` side was dropped, this will return the underlying
+    /// storage.
+    ///
+    /// # Panic
+    ///
+    /// Panics if B is not the type of the underlying storage.
+    pub fn try_unwrap<B: std::ops::DerefMut<Target=[u8]>+'static>(self) -> Result<B, Self> {
+        let BipBufferWriter { buffer, write, last, } = self;
+        match Arc::try_unwrap(buffer) {
+            Ok(b) => Ok(b.into_inner()),
+            Err(buffer) => Err(BipBufferWriter { buffer, write, last, }),
+        }
+    }
 }
 
+/// A write reservation returned by `reserve` or `spin_reserve`. The sender can access the reserved
+/// buffer slice by dererferencing this reservation. Its size is guaranteed to match the requested
+/// length in `reserve` or `spin_reserve`.
+///
+/// There are no guarantees on the contents of the buffer slice when a new reservation is created:
+/// the slice may contain stale data or garbage.
+///
+/// Dropping the reservation (or calling `send`, which consumes `self`) marks the end of the write
+/// and informs the reader that the data in this slice can now be read.
+///
+/// Don't drop the reservation before you're done writing!
+///
+/// # Examples
+/// ```
+/// use spsc_bip_buffer::bip_buffer_from;
+/// let (mut writer, _) = bip_buffer_from(vec![0u8; 1024]);
+/// std::thread::spawn(move || {
+///   let mut reservation = writer.spin_reserve(4);
+///   reservation[0] = 0xf0;
+///   reservation[1] = 0x0f;
+///   reservation[2] = 0x00;
+///   reservation[3] = 0xee;
+///   reservation.send();
+/// }).join().unwrap();
+/// ```
+///
+/// ```
+/// use spsc_bip_buffer::bip_buffer_from;
+/// let (mut writer, _) = bip_buffer_from(vec![0u8; 1024]);
+/// std::thread::spawn(move || {
+///   let mut reservation = writer.spin_reserve(4);
+///   let data = vec![0xf0, 0x0f, 0x00, 0xee];
+///   reservation.copy_from_slice(&data[..]);
+///   // drop reservation, which sends data
+/// }).join().unwrap();
+/// ```
 pub struct BipBufferWriterReservation<'a> {
     writer: &'a mut BipBufferWriter,
     start: usize,
@@ -172,12 +286,18 @@ impl<'a> core::ops::Drop for BipBufferWriterReservation<'a> {
 }
 
 impl<'a> BipBufferWriterReservation<'a> {
+    /// Calling `send` (or simply dropping the reservation) marks the end of the write and informs
+    /// the reader that the data in this slice can now be read.
     pub fn send(self) {
         // drop
     }
 }
 
 impl BipBufferReader {
+    /// Returns a mutable reference to a slice that contains the data written by the writer and not
+    /// yet consumed by the reader. This is the receiving end of the circular buffer.
+    ///
+    /// The caller is free to mutate the data in this slice.
     pub fn valid(&mut self) -> &mut [u8] {
         #[cfg(feature = "debug")]
         eprintln!("???{}", self.buffer.dbg_info());
@@ -199,6 +319,9 @@ impl BipBufferReader {
         }
     }
 
+    /// Consumes the first `len` bytes in `valid`. This marks them as read and they won't be
+    /// included in the slice returned by the next invocation of `valid`. This is used to
+    /// communicate the reader's progress and free buffer space for future writes.
     pub fn consume(&mut self, len: usize) -> bool {
         if self.priv_write >= self.read {
             if len <= self.priv_write - self.read {
@@ -221,16 +344,32 @@ impl BipBufferReader {
         eprintln!("---{}", self.buffer.dbg_info());
         true
     }
+
+    /// Attempts to recover the underlying storage. B must be the type of the storage passed to
+    /// `bip_buffer_from`. If the `BipBufferWriter` side still exists, this will fail and return
+    /// `Err(self)`. If the `BipBufferWriter` side was dropped, this will return the underlying
+    /// storage.
+    ///
+    /// # Panic
+    ///
+    /// Panics if B is not the type of the underlying storage.
+    pub fn try_unwrap<B: std::ops::DerefMut<Target=[u8]>+'static>(self) -> Result<B, Self> {
+        let BipBufferReader { buffer, read, priv_write, priv_last, } = self;
+        match Arc::try_unwrap(buffer) {
+            Ok(b) => Ok(b.into_inner()),
+            Err(buffer) => Err(BipBufferReader { buffer, read, priv_write, priv_last, }),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::bip_buffer;
+    use crate::bip_buffer_from;
 
     #[test]
     fn basic() {
         for i in 0..128 {
-            let (mut writer, mut reader) = bip_buffer(vec![0u8; 16].into_boxed_slice());
+            let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 16].into_boxed_slice());
             let sender = std::thread::spawn(move || {
                 writer.reserve(8).as_mut().expect("reserve").copy_from_slice(&[10, 11, 12, 13, 14, 15, 16, i]);
             });
@@ -246,7 +385,7 @@ mod tests {
     #[test]
     fn static_prime_length() {
         const MSG_LENGTH: u8 = 17; // intentionally prime
-        let (mut writer, mut reader) = bip_buffer(vec![128u8; 64].into_boxed_slice());
+        let (mut writer, mut reader) = bip_buffer_from(vec![128u8; 64].into_boxed_slice());
         let sender = std::thread::spawn(move || {
             let mut msg = [0u8; MSG_LENGTH as usize];
             for _ in 0..1024 {
@@ -278,7 +417,7 @@ mod tests {
         use rand::Rng;
 
         const MAX_LENGTH: usize = 127;
-        let (mut writer, mut reader) = bip_buffer(vec![0u8; 1024].into_boxed_slice());
+        let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 1024]);
         let sender = std::thread::spawn(move || {
             let mut rng = rand::thread_rng();
             let mut msg = [0u8; MAX_LENGTH];

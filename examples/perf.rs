@@ -1,6 +1,6 @@
 #![feature(asm)]
 
-use spsc_bip_buffer::bip_buffer;
+use spsc_bip_buffer::bip_buffer_from;
 
 const REPETITIONS: usize = 1<<20;
 
@@ -50,7 +50,7 @@ fn main() {
     let start = std::time::Instant::now();
 
     const LENGTH: usize = 255;
-    let (mut writer, mut reader) = bip_buffer(vec![0u8; 16<<10].into_boxed_slice());
+    let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 16<<10].into_boxed_slice());
     let sender = ::std::thread::spawn(move || {
         core_affinity::set_for_current(sender_core_id);
         let mut sender_hist = streaming_harness_hdrhist::HDRHist::new();
