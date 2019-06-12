@@ -1,4 +1,4 @@
-#![feature(asm)]
+#![cfg_attr(all(target_arch = "x86_64", feature = "nightly_perf_example"), feature(asm))]
 
 use spsc_bip_buffer::bip_buffer_from;
 
@@ -18,7 +18,7 @@ const REPETITIONS: usize = 1<<20;
 
 #[no_mangle]
 #[inline(never)]
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
 pub fn tsc_ticks() -> u64 {
     let mask = 0xFFFFFFFFu64;
     let high: u64;
@@ -53,6 +53,7 @@ fn main() {
     let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 16<<10].into_boxed_slice());
     let sender = ::std::thread::spawn(move || {
         core_affinity::set_for_current(sender_core_id);
+        #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
         let mut sender_hist = streaming_harness_hdrhist::HDRHist::new();
 
         let mut msg = [0u8; LENGTH];
@@ -63,15 +64,23 @@ fn main() {
                 for i in 1..length {
                     msg[i as usize] = round;
                 }
+                #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
                 let start = tsc_ticks();
                 writer.spin_reserve(length as usize).copy_from_slice(&msg[..length as usize]);
-                let stop = tsc_ticks();
-                sender_hist.add_value(stop - start);
+                #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
+                {
+                    let stop = tsc_ticks();
+                    sender_hist.add_value(stop - start);
+                }
             }
         }
 
         eprintln!("sender done");
-        sender_hist
+        #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
+        let ret = sender_hist;
+        #[cfg(not(all(target_arch = "x86_64", feature = "nightly_perf_example")))]
+        let ret = ();
+        ret
     });
     let receiver = ::std::thread::spawn(move || {
         core_affinity::set_for_current(receiver_core_id);
@@ -107,7 +116,12 @@ fn main() {
         eprintln!("elapsed (nanos)\tbytes\tmsgs\tbytes/s\tmsgs/s");
         println!("{}\t{}\t{}\t{}\t{}", nanos, bytes_received, msgs_received, bytes_per_sec, msgs_per_sec);
     });
-    let hist = sender.join().unwrap();
-    eprintln!("reserve and send:\n{}", hist.summary_string());
+    #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
+    {
+        let hist = sender.join().unwrap();
+        eprintln!("reserve and send:\n{}", hist.summary_string());
+    }
+    #[cfg(not(all(target_arch = "x86_64", feature = "nightly_perf_example")))]
+    sender.join().unwrap();
     receiver.join().unwrap();
 }

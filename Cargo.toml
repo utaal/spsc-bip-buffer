@@ -15,6 +15,7 @@ categories = ["concurrency"]
 [features]
 default = []
 debug = []
+nightly_perf_example = []
 
 [dependencies]
 cache_line_size = "^1.0"
