@@ -3,6 +3,29 @@
 //! area will wait till space is newly available (after the consumer has read the data).
 //!
 //! `spsc-bip-buffer` is lock-free and uses atomics for coordination.
+//!
+//! # Example
+//!
+//! ```
+//! use spsc_bip_buffer::bip_buffer_with_len;
+//! let (mut writer, mut reader) = bip_buffer_with_len(256);
+//! let sender = std::thread::spawn(move || {
+//!     for i in 0..128 {
+//!         let mut reservation = writer.spin_reserve(8);
+//!         reservation.copy_from_slice(&[10, 11, 12, 13, 14, 15, 16, i]);
+//!         reservation.send(); // optional, dropping has the same effect
+//!     }
+//! });
+//! let receiver = std::thread::spawn(move || {
+//!     for i in 0..128 {
+//!         while reader.valid().len() < 8 {}
+//!         assert_eq!(&reader.valid()[..8], &[10, 11, 12, 13, 14, 15, 16, i]);
+//!         reader.consume(8);
+//!     }
+//! });
+//! sender.join().unwrap();
+//! receiver.join().unwrap();
+//! ```
 
 #![deny(missing_docs)]
 
@@ -376,10 +399,30 @@ mod tests {
             let receiver = std::thread::spawn(move || {
                 while reader.valid().len() < 8 {}
                 assert_eq!(reader.valid(), &[10, 11, 12, 13, 14, 15, 16, i]);
+                reader.consume(8);
             });
             sender.join().unwrap();
             receiver.join().unwrap();
         }
+    }
+
+    #[test]
+    fn spsc() {
+        let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 256].into_boxed_slice());
+        let sender = std::thread::spawn(move || {
+            for i in 0..128 {
+                writer.spin_reserve(8).copy_from_slice(&[10, 11, 12, 13, 14, 15, 16, i]);
+            }
+        });
+        let receiver = std::thread::spawn(move || {
+            for i in 0..128 {
+                while reader.valid().len() < 8 {}
+                assert_eq!(&reader.valid()[..8], &[10, 11, 12, 13, 14, 15, 16, i]);
+                reader.consume(8);
+            }
+        });
+        sender.join().unwrap();
+        receiver.join().unwrap();
     }
 
     #[test]
