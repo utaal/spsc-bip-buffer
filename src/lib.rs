@@ -426,6 +426,41 @@ mod tests {
     }
 
     #[test]
+    fn provided_storage() {
+        let storage = vec![0u8; 256].into_boxed_slice();
+        let (mut writer, mut reader) = bip_buffer_from(storage);
+        let sender = std::thread::spawn(move || {
+            writer.spin_reserve(8).copy_from_slice(&[10, 11, 12, 13, 14, 15, 16, 17]);
+        });
+        let receiver = std::thread::spawn(move || {
+            while reader.valid().len() < 8 {}
+            reader.consume(8);
+            reader
+        });
+        sender.join().unwrap();
+        let reader = receiver.join().unwrap();
+        let _: Box<[u8]> = reader.try_unwrap().map_err(|_| ()).expect("failed to recover storage");
+    }
+
+    #[test]
+    #[should_panic]
+    fn provided_storage_wrong_type() {
+        let storage = vec![0u8; 256].into_boxed_slice();
+        let (writer, reader) = bip_buffer_from(storage);
+        std::mem::drop(writer);
+        let _: Vec<u8> = reader.try_unwrap().map_err(|_| ()).expect("failed to recover storage");
+    }
+
+    #[test]
+    fn provided_storage_still_alive() {
+        let storage = vec![0u8; 256].into_boxed_slice();
+        let (writer, reader) = bip_buffer_from(storage);
+        let result: Result<Box<[u8]>, _> = reader.try_unwrap();
+        assert!(result.is_err());
+        std::mem::drop(writer);
+    }
+
+    #[test]
     fn static_prime_length() {
         const MSG_LENGTH: u8 = 17; // intentionally prime
         let (mut writer, mut reader) = bip_buffer_from(vec![128u8; 64].into_boxed_slice());
