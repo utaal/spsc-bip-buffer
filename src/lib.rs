@@ -34,7 +34,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use cache_line_size::CacheAligned;
 
 struct BipBuffer {
-    sequestered: Box<std::any::Any>,
+    sequestered: Box<dyn std::any::Any>,
     buf: *mut u8,
     len: usize,
     read: CacheAligned<AtomicUsize>,
