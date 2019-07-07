@@ -46,9 +46,9 @@ struct BipBuffer {
 impl BipBuffer {
     fn dbg_info(&self) -> String {
         format!(" read: {:?} -- write: {:?} -- last: {:?}  [len: {:?}] ",
-                self.read,
-                self.write,
-                self.last,
+                self.read.0,
+                self.write.0,
+                self.last.0,
                 self.len)
     }
 }
