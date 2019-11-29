@@ -2,8 +2,6 @@
 
 use spsc_bip_buffer::bip_buffer_from;
 
-const REPETITIONS: usize = 1<<20;
-
 // ==================================
 
 // This section is from https://github.com/valarauca/amd64_timer
@@ -39,8 +37,17 @@ pub fn tsc_ticks() -> u64 {
 fn main() {
     let mut args = ::std::env::args();
     let _ = args.next();
+
+    // usage: ./perf <core_id of sender> <core_id of receiver> <message length in bytes>
+    //               <queue size in bytes> <number of repetitions>
+    //               <true/false whether to check message on receiver>
+    // example: cargo run --release --example perf -- 4 5 255 16384 true
+
     let sender_core_id: usize = args.next().unwrap().parse().unwrap();
     let receiver_core_id: usize = args.next().unwrap().parse().unwrap();
+    let length: usize = args.next().unwrap().parse().unwrap();
+    let queue_size: usize = args.next().unwrap().parse().unwrap();
+    let repetitions: usize = args.next().unwrap().parse().unwrap();
     let test_correctness: bool = args.next().unwrap().parse().unwrap();
 
     let mut core_ids: Vec<_> = core_affinity::get_core_ids().unwrap().into_iter().map(Some).collect();
@@ -49,19 +56,16 @@ fn main() {
 
     let start = std::time::Instant::now();
 
-    const LENGTH: usize = 255;
-    let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 16<<10].into_boxed_slice());
+    let (mut writer, mut reader) = bip_buffer_from(vec![0u8; queue_size].into_boxed_slice());
     let sender = ::std::thread::spawn(move || {
         core_affinity::set_for_current(sender_core_id);
         #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
         let mut sender_hist = streaming_harness_hdrhist::HDRHist::new();
 
-        let mut msg = [0u8; LENGTH];
-        for _ in 0..REPETITIONS {
+        let mut msg = vec![0u8; length];
+        for _ in 0..repetitions {
             for round in 0..128u8 {
-                let length: u8 = LENGTH as u8;
-                msg[0] = length;
-                for i in 1..length {
+                for i in 0..length {
                     msg[i as usize] = round;
                 }
                 #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
@@ -86,28 +90,27 @@ fn main() {
         core_affinity::set_for_current(receiver_core_id);
         let mut msgs_received: usize = 0;
 
-        let mut msg = [0u8; LENGTH];
-        for _ in 0..REPETITIONS {
+        let mut msg = vec![0u8; length];
+        for _ in 0..repetitions {
             for round in 0..128u8 {
                 let recv_msg = loop {
                     let valid = reader.valid();
-                    if valid.len() < LENGTH { continue; }
+                    if valid.len() < length { continue; }
                     break valid;
                 };
                 if test_correctness {
-                    msg[0] = LENGTH as u8;
-                    for i in 1..LENGTH {
+                    for i in 0..length {
                         msg[i as usize] = round;
                     }
-                    assert_eq!(&recv_msg[..LENGTH], &msg[..]);
+                    assert_eq!(&recv_msg[..length], &msg[..]);
                 }
-                assert!(reader.consume(LENGTH));
+                assert!(reader.consume(length));
                 msgs_received += 1;
             }
         }
 
         let elapsed = start.elapsed();
-        let bytes_received = msgs_received * LENGTH;
+        let bytes_received = msgs_received * length;
 
         eprintln!("receiver done");
         let nanos = elapsed.as_secs() * 1_000_000_000 + (elapsed.subsec_nanos() as u64);
