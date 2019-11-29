@@ -1,5 +1,7 @@
 #![cfg_attr(all(target_arch = "x86_64", feature = "nightly_perf_example"), feature(asm))]
 
+use std::sync::{Arc, Barrier, RwLock};
+
 use spsc_bip_buffer::bip_buffer_from;
 
 // ==================================
@@ -50,27 +52,43 @@ fn main() {
     let repetitions: usize = args.next().unwrap().parse().unwrap();
     let test_correctness: bool = args.next().unwrap().parse().unwrap();
 
+    dbg!(length, queue_size, repetitions, test_correctness);
+
     let mut core_ids: Vec<_> = core_affinity::get_core_ids().unwrap().into_iter().map(Some).collect();
     let sender_core_id = core_ids[sender_core_id].take().unwrap();
     let receiver_core_id = core_ids[receiver_core_id].take().unwrap();
 
-    let start = std::time::Instant::now();
+    let barrier = Arc::new(Barrier::new(2));
+
+    let start = Arc::new(RwLock::new(std::time::Instant::now()));
 
     let (mut writer, mut reader) = bip_buffer_from(vec![0u8; queue_size].into_boxed_slice());
-    let sender = ::std::thread::spawn(move || {
+    let sender = {
+        let barrier = barrier.clone();
+        let start = start.clone();
+
+        ::std::thread::spawn(move || {
         core_affinity::set_for_current(sender_core_id);
         #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
         let mut sender_hist = streaming_harness_hdrhist::HDRHist::new();
 
-        let mut msg = vec![0u8; length];
+        let msgs: Vec<Vec<u8>> = (0..128u8).map(|round| {
+            let mut msg = vec![0u8; length];
+            for i in 0..length {
+                msg[i as usize] = round;
+            }
+            msg
+        }).collect();
+
+        barrier.wait();
+        eprintln!("sender start");
+        *start.write().unwrap() = std::time::Instant::now();
+
         for _ in 0..repetitions {
             for round in 0..128u8 {
-                for i in 0..length {
-                    msg[i as usize] = round;
-                }
                 #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
                 let start = tsc_ticks();
-                writer.spin_reserve(length as usize).copy_from_slice(&msg[..length as usize]);
+                writer.spin_reserve(length as usize).copy_from_slice(&msgs[round as usize][..length as usize]);
                 #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
                 {
                     let stop = tsc_ticks();
@@ -85,12 +103,25 @@ fn main() {
         #[cfg(not(all(target_arch = "x86_64", feature = "nightly_perf_example")))]
         let ret = ();
         ret
-    });
-    let receiver = ::std::thread::spawn(move || {
+    }) };
+    let receiver = {
+        let barrier = barrier.clone();
+        let start = start.clone();
+        ::std::thread::spawn(move || {
         core_affinity::set_for_current(receiver_core_id);
         let mut msgs_received: usize = 0;
 
-        let mut msg = vec![0u8; length];
+        let msgs: Vec<Vec<u8>> = (0..128u8).map(|round| {
+            let mut msg = vec![0u8; length];
+            for i in 0..length {
+                msg[i as usize] = round;
+            }
+            msg
+        }).collect();
+
+        barrier.wait();
+        eprintln!("receiver start");
+
         for _ in 0..repetitions {
             for round in 0..128u8 {
                 let recv_msg = loop {
@@ -99,16 +130,14 @@ fn main() {
                     break valid;
                 };
                 if test_correctness {
-                    for i in 0..length {
-                        msg[i as usize] = round;
-                    }
-                    assert_eq!(&recv_msg[..length], &msg[..]);
+                    assert_eq!(&recv_msg[..length], &msgs[round as usize][..]);
                 }
                 assert!(reader.consume(length));
                 msgs_received += 1;
             }
         }
 
+        let start = *start.read().unwrap();
         let elapsed = start.elapsed();
         let bytes_received = msgs_received * length;
 
@@ -118,7 +147,7 @@ fn main() {
         let msgs_per_sec = msgs_received as f64 / ((nanos as f64) / 1_000_000_000f64);
         eprintln!("elapsed (nanos)\tbytes\tmsgs\tbytes/s\tmsgs/s");
         println!("{}\t{}\t{}\t{}\t{}", nanos, bytes_received, msgs_received, bytes_per_sec, msgs_per_sec);
-    });
+    }) };
     #[cfg(all(target_arch = "x86_64", feature = "nightly_perf_example"))]
     {
         let hist = sender.join().unwrap();
