@@ -140,7 +140,7 @@ struct PendingReservation {
 }
 
 impl BipBufferWriter {
-    fn reserve_core(&mut self, len: usize) -> Option<PendingReservation> {
+    fn reserve_core(&self, len: usize) -> Option<PendingReservation> {
         assert!(len > 0);
         let read = self.buffer.read.0.load(Ordering::Acquire);
         if self.write >= read {
@@ -313,6 +313,13 @@ impl<'a> BipBufferWriterReservation<'a> {
     /// the reader that the data in this slice can now be read.
     pub fn send(self) {
         // drop
+    }
+
+    /// Truncates a size of the reserved buffer
+    pub fn truncate(&mut self, len: usize) {
+        assert!(len <= self.len);
+
+        self.len = len;
     }
 }
 
@@ -537,4 +544,24 @@ mod tests {
         receiver.join().unwrap();
     }
 
+    #[test]
+    fn truncate_reserved_buffer() {
+        let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 256].into_boxed_slice());
+        let sender = std::thread::spawn(move || {
+            for i in 0..128 {
+                let mut reservation = writer.spin_reserve(8);
+                reservation.truncate(5);
+                reservation.copy_from_slice(&[10, 11, 12, 13, i]);
+            }
+        });
+        let receiver = std::thread::spawn(move || {
+            for i in 0..128 {
+                while reader.valid().len() < 5 {}
+                assert_eq!(&reader.valid()[..5], &[10, 11, 12, 13, i]);
+                reader.consume(5);
+            }
+        });
+        sender.join().unwrap();
+        receiver.join().unwrap();
+    }
 }
