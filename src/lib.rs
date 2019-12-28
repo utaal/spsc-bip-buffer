@@ -292,19 +292,21 @@ impl<'a> core::ops::DerefMut for BipBufferWriterReservation<'a> {
 
 impl<'a> core::ops::Drop for BipBufferWriterReservation<'a> {
     fn drop(&mut self) {
-        if self.wraparound {
-            self.writer.buffer.last.0.store(self.writer.write, Ordering::Relaxed);
-            self.writer.write = 0;
-        }
-        self.writer.write += self.len;
-        if self.writer.write > self.writer.last {
-            self.writer.last = self.writer.write;
-            self.writer.buffer.last.0.store(self.writer.last, Ordering::Relaxed);
-        }
-        self.writer.buffer.write.0.store(self.writer.write, Ordering::Release);
+        if self.len > 0 {
+            if self.wraparound {
+                self.writer.buffer.last.0.store(self.writer.write, Ordering::Relaxed);
+                self.writer.write = 0;
+            }
+            self.writer.write += self.len;
+            if self.writer.write > self.writer.last {
+                self.writer.last = self.writer.write;
+                self.writer.buffer.last.0.store(self.writer.last, Ordering::Relaxed);
+            }
+            self.writer.buffer.write.0.store(self.writer.write, Ordering::Release);
 
-        #[cfg(feature = "debug")]
-        eprintln!("+++{}", self.writer.buffer.dbg_info());
+            #[cfg(feature = "debug")]
+            eprintln!("+++{}", self.writer.buffer.dbg_info());
+        }
     }
 }
 
@@ -572,23 +574,28 @@ mod tests {
 
     #[test]
     fn truncate_reserved_buffer_to_zero() {
-        let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 256].into_boxed_slice());
+        // 25 intentionally multiple of message length 
+        let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 25].into_boxed_slice());
         let sender = std::thread::spawn(move || {
-            for i in 0..128 {
-                let mut reservation = writer.spin_reserve(8);
-                reservation.truncate(5);
-                reservation.copy_from_slice(&[10, 11, 12, 13, i]);
-                if i % 2 == 0 {
-                    reservation.truncate(0);
+            for _round in 0..1024 {
+                for i in 0..128 {
+                    let mut reservation = writer.spin_reserve(5);
+                    reservation.truncate(5);
+                    reservation.copy_from_slice(&[10, 11, 12, 13, i]);
+                    if i % 2 == 0 {
+                        reservation.truncate(0);
+                    }
                 }
             }
         });
         let receiver = std::thread::spawn(move || {
-            for i in 0..128 {
-                if i % 2 != 0 {
-                    while reader.valid().len() < 5 {}
-                    assert_eq!(&reader.valid()[..5], &[10, 11, 12, 13, i]);
-                    reader.consume(5);
+            for _round in 0..1024 {
+                for i in 0..128 {
+                    if i % 2 != 0 {
+                        while reader.valid().len() < 5 {}
+                        assert_eq!(&reader.valid()[..5], &[10, 11, 12, 13, i]);
+                        reader.consume(5);
+                    }
                 }
             }
         });
