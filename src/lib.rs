@@ -315,7 +315,12 @@ impl<'a> BipBufferWriterReservation<'a> {
         // drop
     }
 
-    /// Truncates a size of the reserved buffer
+    /// Truncates the reservation to `len`.
+    /// This is useful when the reservation is made before the final message length is known: the
+    /// sender can reserve a length that is an upper-bound of the expected message size, then write
+    /// the actual message to the reservation buffer (possibly through the `Write` trait)
+    /// and then truncate the reservation to the actual message length written.
+    /// This ensures that only valid bytes are sent on `drop`.
     pub fn truncate(&mut self, len: usize) {
         assert!(len <= self.len);
 
@@ -550,8 +555,8 @@ mod tests {
         let sender = std::thread::spawn(move || {
             for i in 0..128 {
                 let mut reservation = writer.spin_reserve(8);
+                reservation[..5].copy_from_slice(&[10, 11, 12, 13, i]);
                 reservation.truncate(5);
-                reservation.copy_from_slice(&[10, 11, 12, 13, i]);
             }
         });
         let receiver = std::thread::spawn(move || {
@@ -559,6 +564,32 @@ mod tests {
                 while reader.valid().len() < 5 {}
                 assert_eq!(&reader.valid()[..5], &[10, 11, 12, 13, i]);
                 reader.consume(5);
+            }
+        });
+        sender.join().unwrap();
+        receiver.join().unwrap();
+    }
+
+    #[test]
+    fn truncate_reserved_buffer_to_zero() {
+        let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 256].into_boxed_slice());
+        let sender = std::thread::spawn(move || {
+            for i in 0..128 {
+                let mut reservation = writer.spin_reserve(8);
+                reservation.truncate(5);
+                reservation.copy_from_slice(&[10, 11, 12, 13, i]);
+                if i % 2 == 0 {
+                    reservation.truncate(0);
+                }
+            }
+        });
+        let receiver = std::thread::spawn(move || {
+            for i in 0..128 {
+                if i % 2 != 0 {
+                    while reader.valid().len() < 5 {}
+                    assert_eq!(&reader.valid()[..5], &[10, 11, 12, 13, i]);
+                    reader.consume(5);
+                }
             }
         });
         sender.join().unwrap();
