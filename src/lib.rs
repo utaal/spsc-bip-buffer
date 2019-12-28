@@ -328,6 +328,15 @@ impl<'a> BipBufferWriterReservation<'a> {
 
         self.len = len;
     }
+
+    /// Cancels the reservation by truncating it to zero length.
+    /// Data in the reservation buffer won't be sent, however the buffer contents may re-appear as
+    /// garbage in later reservation that overlap the same section of the ring buffer: this is
+    /// generally not an issue as the reservation buffer is generally overwritten by the sender.
+    #[inline]
+    pub fn cancel(&mut self) {
+        self.truncate(0);
+    }
 }
 
 impl BipBufferReader {
@@ -583,7 +592,7 @@ mod tests {
                     reservation.truncate(5);
                     reservation.copy_from_slice(&[10, 11, 12, 13, i]);
                     if i % 2 == 0 {
-                        reservation.truncate(0);
+                        reservation.cancel();
                     }
                 }
             }
