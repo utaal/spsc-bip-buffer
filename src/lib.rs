@@ -184,7 +184,7 @@ impl BipBufferWriter {
     pub fn reserve(&mut self, len: usize) -> Option<BipBufferWriterReservation<'_>> {
         let reserved = self.reserve_core(len);
         if let Some(PendingReservation { start, len, wraparound }) = reserved {
-            Some(BipBufferWriterReservation { writer: self, start, len, wraparound })
+            Some(BipBufferWriterReservation { writer: self, start, len, wraparound, send_on_drop: true })
         } else {
             None
         }
@@ -209,7 +209,7 @@ impl BipBufferWriter {
                 Some(r) => break r,
             }
         };
-        BipBufferWriterReservation { writer: self, start, len, wraparound }
+        BipBufferWriterReservation { writer: self, start, len, wraparound, send_on_drop: true }
     }
 
     /// Attempts to recover the underlying storage. B must be the type of the storage passed to
@@ -270,6 +270,7 @@ pub struct BipBufferWriterReservation<'a> {
     start: usize,
     len: usize,
     wraparound: bool,
+    send_on_drop: bool,
 }
 
 impl<'a> core::ops::Deref for BipBufferWriterReservation<'a> {
@@ -292,6 +293,14 @@ impl<'a> core::ops::DerefMut for BipBufferWriterReservation<'a> {
 
 impl<'a> core::ops::Drop for BipBufferWriterReservation<'a> {
     fn drop(&mut self) {
+        if self.send_on_drop {
+            self.send_internal();
+        }
+    }
+}
+
+impl<'a> BipBufferWriterReservation<'a> {
+    fn send_internal(&mut self) {
         if self.len > 0 {
             if self.wraparound {
                 self.writer.buffer.last.0.store(self.writer.write, Ordering::Relaxed);
@@ -308,13 +317,36 @@ impl<'a> core::ops::Drop for BipBufferWriterReservation<'a> {
             eprintln!("+++{}", self.writer.buffer.dbg_info());
         }
     }
-}
 
-impl<'a> BipBufferWriterReservation<'a> {
+    /// Disable auto-sending on `drop`. 
+    ///
+    /// This changes this reservation to not mark the content as ready for the reader when the
+    /// reservation is dropped. After `truncate_on_drop` has been called, the writer needs to
+    /// explicitly call `send` to transfer the data to the receiver.
+    /// If it fails to do so and the reservation is dropped, no data is sent (this is equivalent
+    /// to calling `truncate(0)` on a reservation that sends on `drop`).
+    ///
+    /// # Examples
+    /// ```
+    /// use spsc_bip_buffer::bip_buffer_from;
+    /// let (mut writer, _) = bip_buffer_from(vec![0u8; 1024]);
+    /// std::thread::spawn(move || {
+    ///   let mut reservation = writer.spin_reserve(4);
+    ///   reservation.set_manual_send();
+    ///   reservation[0] = 0xf0;
+    ///   reservation[1] = 0x0f;
+    ///   // no data sent on drop of `reservation`
+    /// }).join().unwrap();
+    /// ```
+    pub fn set_manual_send(&mut self) {
+        self.send_on_drop = false;
+    }
+
     /// Calling `send` (or simply dropping the reservation) marks the end of the write and informs
     /// the reader that the data in this slice can now be read.
-    pub fn send(self) {
-        // drop
+    pub fn send(mut self) {
+        self.send_on_drop = true;
+        std::mem::drop(self);
     }
 
     /// Truncates the reservation to `len`.
@@ -327,6 +359,15 @@ impl<'a> BipBufferWriterReservation<'a> {
         assert!(len <= self.len);
 
         self.len = len;
+    }
+
+    /// Cancels the reservation by truncating it to zero length.
+    /// Data in the reservation buffer won't be sent, however the buffer contents may re-appear as
+    /// garbage in later reservation that overlap the same section of the ring buffer: this is
+    /// generally not an issue as the reservation buffer is generally overwritten by the sender.
+    #[inline]
+    pub fn cancel(&mut self) {
+        self.truncate(0);
     }
 }
 
@@ -580,10 +621,40 @@ mod tests {
             for _round in 0..1024 {
                 for i in 0..128 {
                     let mut reservation = writer.spin_reserve(5);
-                    reservation.truncate(5);
                     reservation.copy_from_slice(&[10, 11, 12, 13, i]);
                     if i % 2 == 0 {
-                        reservation.truncate(0);
+                        reservation.cancel();
+                    }
+                }
+            }
+        });
+        let receiver = std::thread::spawn(move || {
+            for _round in 0..1024 {
+                for i in 0..128 {
+                    if i % 2 != 0 {
+                        while reader.valid().len() < 5 {}
+                        assert_eq!(&reader.valid()[..5], &[10, 11, 12, 13, i]);
+                        reader.consume(5);
+                    }
+                }
+            }
+        });
+        sender.join().unwrap();
+        receiver.join().unwrap();
+    }
+
+    #[test]
+    fn set_manual_send_of_reservation() {
+        // 25 intentionally multiple of message length 
+        let (mut writer, mut reader) = bip_buffer_from(vec![0u8; 25].into_boxed_slice());
+        let sender = std::thread::spawn(move || {
+            for _round in 0..1024 {
+                for i in 0..128 {
+                    let mut reservation = writer.spin_reserve(5);
+                    reservation.set_manual_send();
+                    reservation.copy_from_slice(&[10, 11, 12, 13, i]);
+                    if i % 2 != 0 {
+                        reservation.send();
                     }
                 }
             }
