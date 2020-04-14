@@ -2,9 +2,9 @@
 
 [![Crates.io](https://img.shields.io/crates/v/spsc-bip-buffer.svg)](https://crates.io/crates/spsc-bip-buffer) [![Docs](https://img.shields.io/badge/docs-.rs-blue.svg)](https://docs.rs/spsc-bip-buffer)
 
-| x86 | arm64 |
-| --- | --- |
-| [![Build Status](https://travis-ci.org/utaal/spsc-bip-buffer.svg?branch=master)](https://travis-ci.org/utaal/spsc-bip-buffer) | [![Build Status](https://drone.scw-arm-01.lattuada.me/api/badges/utaal/spsc-bip-buffer/status.svg)](https://drone.scw-arm-01.lattuada.me/utaal/spsc-bip-buffer) |
+| x86 |
+| --- |
+| [![Build Status](https://travis-ci.org/utaal/spsc-bip-buffer.svg?branch=master)](https://travis-ci.org/utaal/spsc-bip-buffer) |
 
 `spsc-bip-buffer` is a single-producer single-consumer circular buffer that always supports writing a contiguous chunk of data. Write requests that cannot fit in an available contiguous area will wait till space is newly available (after the consumer has read the data).
 
