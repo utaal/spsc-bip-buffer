@@ -321,7 +321,7 @@ impl<'a> BipBufferWriterReservation<'a> {
     /// Disable auto-sending on `drop`. 
     ///
     /// This changes this reservation to not mark the content as ready for the reader when the
-    /// reservation is dropped. After `truncate_on_drop` has been called, the writer needs to
+    /// reservation is dropped. After `set_manual_send` has been called, the writer needs to
     /// explicitly call `send` to transfer the data to the receiver.
     /// If it fails to do so and the reservation is dropped, no data is sent (this is equivalent
     /// to calling `truncate(0)` on a reservation that sends on `drop`).
